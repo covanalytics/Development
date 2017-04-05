@@ -9,14 +9,20 @@ library("reshape")
 library("reshape2")
 library("stringr")
 library("zoo")
-library("lubridate")
 library("ggmap")
 library("arcgisbinding")
+library("sp")
+library("spdep")
+library("rgdal")
+library("maptools")
 library("splitstackshape")
 library("RSQLite")
 
 #Load newest update from PDS
-update <- read.csv("Update.csv", header=TRUE, na.strings=c("", NA), stringsAsFactors = FALSE)
+update <- read.csv("Update.csv",  header=TRUE, na.strings=c("", NA), stringsAsFactors = FALSE)
+
+#Format value column to integer
+update$Value <- as.integer(gsub("\\$|\\,|\\.\\d*", "", update$Value))
 
 ## Remove rows that are all NAs. CSV formatting might geenrate one of these-------
 update <- update[complete.cases(update),]
@@ -27,9 +33,26 @@ update <- within(update, {
   FullAddress <- paste(Address, Jurisdiction, State, sep = " ")
   Value <- as.numeric(Value)})
 
-#Geocode address against Google API
-coordinates <- geocode(update$FullAddress)
-update <- cbind(update, coordinates)
+
+# Geocode location of permits
+covstat_geocode <- function(df, address){
+  coordinates <- geocode(address)
+  df <- cbind(df, coordinates)
+  
+  # Add zero to NAs in lat and lon if geocode fails
+    if(sum(is.na(df$lat > 0))){
+      for (i in 1:length(df$lat)){
+        if(is.na(df$lat[i]))
+          df$lat[i] <- 0
+      }
+      for (i in 1:length(df$lon)){
+        if(is.na(df$lon[i]))
+          df$lon[i] <- 0
+      }
+    }
+  df
+}
+update <- covstat_geocode(update, update$FullAddress)
 
 
 #### Send to ArcGIS ####
@@ -44,7 +67,7 @@ send_arcgis <- function(dataframe, path, layerName){
 send_arcgis(update, "C:/Users/tsink/Mapping/Geocoding/Permits", "BldgPermitUpdate")
 
 #### Receive from ArcGIS ####
-receive_arcgis <- function(fromPath, dataframeName) {
+receive_arcgis <- function(fromPath) {
   arc.check_product()
   ## Read GIS Features 
   read <- arc.open(fromPath)
@@ -54,7 +77,7 @@ receive_arcgis <- function(fromPath, dataframeName) {
   shape <- arc.shape(dataframeName)
   dataframeName<- data.frame(dataframeName, long=shape$x, lat=shape$y)
 }
-BldPermitsGIS <- receive_arcgis("C:/Users/tsink/Mapping/Geocoding/Permits/BldPermitsUpdate.shp", BldPermitsGIS)
+BldPermitsGIS <- receive_arcgis("C:/Users/tsink/Mapping/Geocoding/Permits/BldPermitsUpdate.shp")
 
 
 BldPermitsGIS <- BldPermitsGIS[, c(-1:-2, -12:-17, -19:-28)]
@@ -98,9 +121,11 @@ dbName <- "O:/AllUsers/CovStat/Data Portal/repository/Data/Database Files/Develo
 dbPull <- 'select * from BuildingPermits'
 RepoPath <- "O:/AllUsers/CovStat/Data Portal/Repository/Data/Development/EconomicDevelopment/BuildingPermits.csv"
 TablPath <- "U:/CityWide Performance/CovStat/CovStat Projects/Development/Tableau Files/BuildingPermitsTableau.csv"
-sql_write(connection, dbName , "BuildingPermits", dash_bldPermits, dbPull, RepoPath, TablPath, append = TRUE)
+sql_write(connection, dbName , "BuildingPermits", Rfile = BldPermitsGIS, dbPull, RepoPath, TablPath, append = TRUE)
 
-
+# Db pull if needed
+#cons.development <- dbConnect(drv=RSQLite::SQLite(), "O:/AllUsers/CovStat/Data Portal/repository/Data/Database Files/Development.db")
+#dash_bldPermits <- dbGetQuery(cons.development, 'select * from BuildingPermits')
 
 
 ## Columns to keep and names for OpenGov---------------------------
@@ -109,7 +134,7 @@ names(BldPermitsGIS) <- c("Jurisdiction", "Address", "Permit Number", "Issued Da
                           "Application Date", "Value", "Count", "lon", "lat", "Neighborhood")
 
 ## Write for OpenGov Update. Change file name for update -------------------------------------------
-file_loc  <- "U:/CityWide Performance/CovStat/CovStat Projects/Development/Economic Development/Building_Permits/OpenGov/February2017.csv"
+file_loc  <- "U:/CityWide Performance/CovStat/CovStat Projects/Development/Economic Development/Building_Permits/OpenGov/March2017.csv"
 write.csv(BldPermitsGIS, file_loc, row.names = FALSE)
 
 
